@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # RAG Chatbot
 
 This repository contains a minimal project layout for a Retrieval-Augmented Generation (RAG) chatbot.
@@ -12,3 +13,6 @@ Usage
 3. Add knowledge documents to `knowledge/` and implement ingestion scripts in `scripts/`.
 
 License: Add a license to this repository if needed.
+=======
+# rag-chatbot
+>>>>>>> 3cbe47bd45ae42e66750db047d576d60df48bcbe
