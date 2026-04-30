@@ -1,0 +1,64 @@
+# Ignore environment files (secrets)
+.env
+.env.*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Log files
+*.log
+
+# Database files
+*.db
+*.sqlite
+
+# Streamlit cache
+.streamlit/
+
+# Misc
+secrets.json
+
+# Optional: lockfiles or local-only artifacts
+*.env.local
+
+# Keep any other local-only overrides out of git
+.local
