@@ -164,21 +164,26 @@ def main():
         exec_sql(conn, "CREATE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id);",
                  desc="Index session_id")
 
-        # Grant privileges to admin user
-        admin_user = os.getenv("DB_ADMIN_USER", "admin")
+        # Grant privileges to admin user (default to 'postgres')
+        admin_user = os.getenv("DB_ADMIN_USER", "postgres")
         print(f"Granting privileges to user '{admin_user}'...")
-        grant_sql = sql.SQL("""
-            GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {admin};
-            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {admin};
-        """).format(admin=sql.Identifier(admin_user))
-        exec_sql(conn, grant_sql.as_string(conn), desc="Grant privileges to admin")
-
-        # Optionally change owner of tables to admin
-        try:
-            owner_sql = sql.SQL("ALTER TABLE company_documents OWNER TO {admin}; ALTER TABLE document_chunks OWNER TO {admin}; ALTER TABLE conversations OWNER TO {admin};").format(admin=sql.Identifier(admin_user))
-            exec_sql(conn, owner_sql.as_string(conn), desc="Change table owners to admin")
-        except Exception:
-            print("Warning: could not change table owner (you may not have permission). Continuing...")
+        # Check if role exists
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (admin_user,))
+            if cur.fetchone():
+                grant_sql = sql.SQL("""
+                    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {admin};
+                    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {admin};
+                """).format(admin=sql.Identifier(admin_user))
+                exec_sql(conn, grant_sql.as_string(conn), desc=f"Grant privileges to {admin_user}")
+                # Optionally change owner of tables to admin
+                try:
+                    owner_sql = sql.SQL("ALTER TABLE company_documents OWNER TO {admin}; ALTER TABLE document_chunks OWNER TO {admin}; ALTER TABLE conversations OWNER TO {admin};").format(admin=sql.Identifier(admin_user))
+                    exec_sql(conn, owner_sql.as_string(conn), desc=f"Change table owners to {admin_user}")
+                except Exception:
+                    print(f"Warning: could not change table owner to {admin_user} (you may not have permission). Continuing...")
+            else:
+                print(f"Warning: role '{admin_user}' does not exist. Skipping privilege grant and ownership change.")
 
         # Verification: check extension and tables
         print("Verifying extension and table creation...")

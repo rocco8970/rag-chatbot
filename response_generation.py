@@ -1,19 +1,16 @@
-"""Response generation utilities supporting OpenAI and AWS Bedrock.
+"""Response generation — OpenAI and AWS Bedrock (Claude via Messages API).
 
-Provides three functions:
-- generate_response_without_context
-- generate_response_with_context
-- generate_response_with_guardrail
+Provides:
+- generate_response_without_context(question, model, client, provider)
+- generate_response_with_context(question, chunks, model, client, provider)
+- generate_response_with_guardrail(question, chunks, model, client, provider)
 
-Each function returns a tuple: (answer: str, response_time: float)
+Each returns (answer: str, elapsed_seconds: float).
 
-Provider handling:
-- `provider="OpenAI"` expects a client from `from openai import OpenAI`
-- `provider="Bedrock"` expects a boto3-style client with `invoke_model` method
-
-Note: Bedrock APIs vary; this module attempts a generic `invoke_model` call
-which works with typical boto3 Bedrock clients. Adjust if your Bedrock SDK
-requires different parameters.
+Bedrock note:
+  Claude models use the Bedrock Messages API (anthropic_version bedrock-2023-05-31).
+  The model ID must be a full Bedrock ARN or the short cross-region inference ID,
+  e.g. "anthropic.claude-3-haiku-20240307-v1:0".
 """
 
 from typing import List, Dict, Tuple, Union
@@ -21,42 +18,39 @@ import time
 import json
 import sys
 
-from openai import OpenAI
-from openai import OpenAIError
+from openai import OpenAI, OpenAIError
 
 try:
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
-except Exception:
+except ImportError:
     boto3 = None
-
 
 ContextChunk = Union[str, Dict]
 
-
 _WITH_CONTEXT_TEMPLATE = (
-    "You are provided with {N} context passages. Read ALL of them carefully and synthesize information to answer comprehensively.\n\n"
+    "You are provided with {N} context passages. Read ALL of them carefully and synthesize "
+    "information to answer comprehensively.\n\n"
     "IMPORTANT: Use information from ALL context passages, not just one. Combine and synthesize.\n\n"
     "{contexts}\n\n"
     "Question: {question}\n\n"
     "Instructions:\n"
     "- Read and analyze ALL {N} passages\n"
     "- Combine information from multiple passages\n"
-    "- Provide comprehensive answer\n"
-    "- Extract specific details (counts, lists, etc.)\n\n"
+    "- Provide a comprehensive answer\n"
+    "- Extract specific details (counts, lists, specs, etc.)\n\n"
     "Answer:"
 )
-
 
 _GUARDRAIL_TEMPLATE = (
     "You are provided with {N} context passages. Answer based ONLY on this information.\n\n"
     "STRICT RULES:\n"
     "1. Read ALL {N} passages\n"
-    "2. Answer ONLY using information in contexts\n"
+    "2. Answer ONLY using information in the contexts\n"
     "3. You MAY synthesize and infer from passages\n"
     "4. You MAY count, list, enumerate items mentioned\n"
-    "5. If contexts have relevant info, use it (can be partial)\n"
-    "6. ONLY say 'I don't have information' if NO relevant info at all\n"
+    "5. If contexts have relevant info, use it\n"
+    "6. ONLY say 'I don't have information' if NO relevant info exists at all\n"
     "7. Do NOT use external knowledge\n\n"
     "{contexts}\n\n"
     "Question: {question}\n\n"
@@ -64,27 +58,22 @@ _GUARDRAIL_TEMPLATE = (
 )
 
 
-def _build_context_block(context_chunks: List[ContextChunk]) -> str:
-    parts: List[str] = []
-    for i, c in enumerate(context_chunks, start=1):
-        if isinstance(c, dict):
-            content = c.get("content") or c.get("text") or str(c)
-        else:
-            content = str(c)
+def _build_context_block(chunks: List[ContextChunk]) -> str:
+    parts = []
+    for i, c in enumerate(chunks, start=1):
+        content = c.get("content") or c.get("text") or str(c) if isinstance(c, dict) else str(c)
         parts.append(f"[Context {i}]\n{content}")
     return "\n\n".join(parts)
 
 
-def _call_openai_chat(client: OpenAI, messages: List[Dict], model: str, temperature: float = 0.7) -> str:
+# ── OpenAI ───────────────────────────────────────────────────────────────────
+
+def _call_openai(client: OpenAI, messages: List[Dict], model: str, temperature: float) -> str:
     try:
         resp = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
-        # SDK returns choices with message
-        choices = getattr(resp, "choices", None)
-        if not choices:
-            # try dict-like
-            choices = resp.get("choices") if isinstance(resp, dict) else None
-        if choices and len(choices) > 0:
-            msg = choices[0].get("message") if isinstance(choices[0], dict) else getattr(choices[0], "message", None)
+        choices = getattr(resp, "choices", None) or (resp.get("choices") if isinstance(resp, dict) else None)
+        if choices:
+            msg = getattr(choices[0], "message", None) or (choices[0].get("message") if isinstance(choices[0], dict) else None)
             if isinstance(msg, dict):
                 return msg.get("content", "").strip()
             return getattr(msg, "content", "").strip()
@@ -95,47 +84,60 @@ def _call_openai_chat(client: OpenAI, messages: List[Dict], model: str, temperat
         raise RuntimeError(f"OpenAI call failed: {e}")
 
 
-def _call_bedrock_invoke(client, model: str, prompt: str, temperature: float = 0.7) -> str:
-    if client is None:
-        raise RuntimeError("Bedrock client not available (boto3 not installed)")
-    # Generic invocation for boto3 Bedrock client
-    try:
-        invoke_args = {
-            "modelId": model,
-            "contentType": "application/json",
-            "accept": "application/json",
-            "body": json.dumps({"input": prompt}).encode("utf-8"),
-        }
-        resp = client.invoke_model(**invoke_args)
-        # resp['body'] is a streaming HTTP response; try reading
-        body = resp.get("body")
-        if hasattr(body, "read"):
-            raw = body.read()
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-        else:
-            raw = body
+# ── AWS Bedrock (Claude Messages API) ────────────────────────────────────────
 
-        # The exact shape depends on model; try to parse JSON
-        try:
-            parsed = json.loads(raw)
-            # try known keys
-            if "output" in parsed:
-                return parsed["output"].strip()
-            # some returns: {"body": {"text": "..."}}
-            if isinstance(parsed, dict):
-                # flatten
-                for v in parsed.values():
-                    if isinstance(v, str) and v.strip():
-                        return v.strip()
-            return str(parsed).strip()
-        except Exception:
-            return str(raw).strip()
+def _call_bedrock_claude(client, model: str, system_prompt: str, user_prompt: str, temperature: float) -> str:
+    """Invoke a Claude model on Bedrock using the Messages API format."""
+    if client is None:
+        raise RuntimeError("Bedrock client is None — check AWS credentials in .env")
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 2048,
+        "temperature": temperature,
+        "messages": [
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if system_prompt:
+        body["system"] = system_prompt
+
+    try:
+        resp = client.invoke_model(
+            modelId=model,
+            body=json.dumps(body),
+            contentType="application/json",
+            accept="application/json",
+        )
+        raw = json.loads(resp["body"].read())
+        # Claude Messages API returns: {"content": [{"type": "text", "text": "..."}], ...}
+        content_blocks = raw.get("content", [])
+        if content_blocks and isinstance(content_blocks, list):
+            return content_blocks[0].get("text", "").strip()
+        # Fallback
+        return str(raw).strip()
     except (BotoCoreError, ClientError) as e:
         raise RuntimeError(f"Bedrock invocation error: {e}")
     except Exception as e:
         raise RuntimeError(f"Bedrock call failed: {e}")
 
+
+def _dispatch(provider: str, client, model: str, system_prompt: str, user_prompt: str, temperature: float) -> str:
+    """Route to the correct backend."""
+    p = provider.lower()
+    if p == "openai":
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        return _call_openai(client, messages, model, temperature)
+    elif p in ("bedrock", "aws", "awsbedrock", "aws bedrock"):
+        return _call_bedrock_claude(client, model, system_prompt, user_prompt, temperature)
+    else:
+        raise ValueError(f"Unsupported provider: {provider!r}. Use 'OpenAI' or 'AWS Bedrock'.")
+
+
+# ── Public functions ──────────────────────────────────────────────────────────
 
 def generate_response_without_context(
     question: str,
@@ -144,32 +146,19 @@ def generate_response_without_context(
     provider: str = "OpenAI",
     temperature: float = 0.7,
 ) -> Tuple[str, float]:
-    """Generate a response without external context.
-
-    Supports OpenAI and AWS Bedrock providers.
-
-    Returns:
-        (answer, response_time_seconds)
-    """
     start = time.perf_counter()
+    answer = ""
     try:
-        if provider.lower() == "openai":
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": question},
-            ]
-            answer = _call_openai_chat(client, messages, model=model, temperature=temperature)
-        elif provider.lower() in ("bedrock", "aws", "awsbedrock"):
-            prompt = question
-            answer = _call_bedrock_invoke(client, model, prompt, temperature=temperature)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        answer = _dispatch(
+            provider, client, model,
+            system_prompt="You are a helpful assistant.",
+            user_prompt=question,
+            temperature=temperature,
+        )
     except Exception as e:
         print(f"generate_response_without_context error: {e}", file=sys.stderr)
-        return "", 0.0
-    finally:
-        elapsed = time.perf_counter() - start
-
+        answer = f"⚠️ Error: {e}"
+    elapsed = time.perf_counter() - start
     return answer, elapsed
 
 
@@ -181,33 +170,22 @@ def generate_response_with_context(
     provider: str = "OpenAI",
     temperature: float = 0.7,
 ) -> Tuple[str, float]:
-    """Generate a response that synthesizes information from provided context passages.
-
-    Combines all context chunks into numbered passages and instructs the LLM to
-    use information from all passages.
-    """
     start = time.perf_counter()
+    answer = ""
     try:
         N = len(context_chunks)
         contexts = _build_context_block(context_chunks)
-        prompt = _WITH_CONTEXT_TEMPLATE.format(N=N, contexts=contexts, question=question)
-
-        if provider.lower() == "openai":
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant that answers using provided contexts."},
-                {"role": "user", "content": prompt},
-            ]
-            answer = _call_openai_chat(client, messages, model=model, temperature=temperature)
-        elif provider.lower() in ("bedrock", "aws", "awsbedrock"):
-            answer = _call_bedrock_invoke(client, model, prompt, temperature=temperature)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        user_prompt = _WITH_CONTEXT_TEMPLATE.format(N=N, contexts=contexts, question=question)
+        answer = _dispatch(
+            provider, client, model,
+            system_prompt="You are a helpful assistant that answers using provided contexts.",
+            user_prompt=user_prompt,
+            temperature=temperature,
+        )
     except Exception as e:
         print(f"generate_response_with_context error: {e}", file=sys.stderr)
-        return "", 0.0
-    finally:
-        elapsed = time.perf_counter() - start
-
+        answer = f"⚠️ Error: {e}"
+    elapsed = time.perf_counter() - start
     return answer, elapsed
 
 
@@ -218,32 +196,20 @@ def generate_response_with_guardrail(
     client,
     provider: str = "OpenAI",
 ) -> Tuple[str, float]:
-    """Generate a guarded response using only provided context.
-
-    Rules: prohibit use of external knowledge; allow synthesis and inference;
-    lower temperature for focused answers.
-    """
     start = time.perf_counter()
+    answer = ""
     try:
         N = len(context_chunks)
         contexts = _build_context_block(context_chunks)
-        prompt = _GUARDRAIL_TEMPLATE.format(N=N, contexts=contexts, question=question)
-
-        temperature = 0.3
-        if provider.lower() == "openai":
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant that must only use the provided context passages."},
-                {"role": "user", "content": prompt},
-            ]
-            answer = _call_openai_chat(client, messages, model=model, temperature=temperature)
-        elif provider.lower() in ("bedrock", "aws", "awsbedrock"):
-            answer = _call_bedrock_invoke(client, model, prompt, temperature=temperature)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        user_prompt = _GUARDRAIL_TEMPLATE.format(N=N, contexts=contexts, question=question)
+        answer = _dispatch(
+            provider, client, model,
+            system_prompt="You are a strict assistant that must only use the provided context passages. Do not use external knowledge.",
+            user_prompt=user_prompt,
+            temperature=0.3,
+        )
     except Exception as e:
         print(f"generate_response_with_guardrail error: {e}", file=sys.stderr)
-        return "", 0.0
-    finally:
-        elapsed = time.perf_counter() - start
-
+        answer = f"⚠️ Error: {e}"
+    elapsed = time.perf_counter() - start
     return answer, elapsed
