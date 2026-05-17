@@ -50,32 +50,51 @@ cp .env.example .env
 
 ### Run the Application
 
+#### Option A — Streamlit UI (original)
 \`\`\`bash
 streamlit run streamlit_app.py
 \`\`\`
-
 Open http://localhost:8501 in your browser.
+
+#### Option B — React + FastAPI UI (new)
+Requires the Python backend dependencies installed (`pip install -r requirements.txt`).
+
+\`\`\`bash
+# Terminal 1 — Python backend
+uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2 — React frontend
+cd frontend
+npm install   # first time only
+npm run dev
+\`\`\`
+Open http://localhost:5173 in your browser.
 
 ## 📁 Project Structure
 
 \`\`\`
 rag-chatbot/
+├── backend/
+│   └── main.py                # FastAPI app (REST + WebSocket)
+├── frontend/                  # React 18 + Vite UI
+│   └── src/
+│       ├── App.jsx
+│       └── components/
+│           ├── Sidebar.jsx
+│           ├── ChatWindow.jsx
+│           └── Message.jsx
 ├── src/
 │   ├── document_utils.py      # Document processing
 │   ├── embeddings_utils.py    # Free embeddings
-│   ├── response_generation.py # LLM responses
+│   ├── response_generation.py # LLM responses (+ streaming)
 │   ├── rag_pipeline.py        # Main pipeline
 │   └── evaluation.py          # Evaluation metrics
-├── scripts/
-│   └── checking_db.py         # DB utilities
 ├── docs/
 │   ├── DEPLOYMENT.md
 │   ├── USER_GUIDE.md
 │   └── TECHNICAL_ARCHITECTURE.md
-├── data/
-│   └── uploads/               # User uploads
 ├── chroma_db/                 # Vector database
-├── streamlit_app.py           # Main app
+├── streamlit_app.py           # Original Streamlit UI (still works)
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -85,12 +104,14 @@ rag-chatbot/
 
 | Component | Technology |
 |-----------|-----------|
-| **Frontend** | Streamlit |
-| **LLM** | Google Gemini / Groq |
-| **Embeddings** | Sentence Transformers (Free) |
-| **Vector DB** | ChromaDB |
-| **Document Processing** | PyMuPDF, python-docx |
-| **Language** | Python 3.9+ |
+| **Frontend (Streamlit UI)** | Streamlit |
+| **Frontend (React UI)** | React 18 + Vite + Tailwind CSS + Framer Motion |
+| **Backend API** | FastAPI + WebSockets |
+| **LLM** | Google Gemini 2.5 Flash / Groq Llama 3.1 (both free) |
+| **Embeddings** | Sentence Transformers — `all-MiniLM-L6-v2` (local, free) |
+| **Vector DB** | ChromaDB (persistent, cosine similarity) |
+| **Document Processing** | PyMuPDF, python-docx, pandas |
+| **Language** | Python 3.9+ / Node 18+ |
 
 ## 📊 System Architecture
 

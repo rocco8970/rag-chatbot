@@ -1,8 +1,9 @@
 # RAG Chatbot — Complete Project Guide
 
-> **Author:** Ali Khan | **Email:** ali.khan@kimbal.io  
-> **Last Updated:** 2026-04-30  
-> **Status:** Production-ready after all bug fixes applied
+> **Project:** RAG-Based Intelligent Document Q&A System  
+> **University:** Jamia Hamdard, Department of Computer Science  
+> **Academic Year:** 2024–25  
+> **Last Updated:** 2026-05-18
 
 ---
 
@@ -11,15 +12,12 @@
 1. [What This Project Does](#1-what-this-project-does)
 2. [Project File Map](#2-project-file-map)
 3. [How It Works — Step by Step](#3-how-it-works--step-by-step)
-4. [System Requirements](#4-system-requirements)
-5. [Setup Instructions (Full)](#5-setup-instructions-full)
-6. [Running the App](#6-running-the-app)
-7. [Using the App](#7-using-the-app)
-8. [All Code Files Explained](#8-all-code-files-explained)
-9. [Database Schema](#9-database-schema)
-10. [Bugs Fixed](#10-bugs-fixed)
-11. [Environment Variables Reference](#11-environment-variables-reference)
-12. [Troubleshooting](#12-troubleshooting)
+4. [All Code Files Explained](#4-all-code-files-explained)
+5. [System Requirements](#5-system-requirements)
+6. [Setup Instructions](#6-setup-instructions)
+7. [Running the App](#7-running-the-app)
+8. [Environment Variables Reference](#8-environment-variables-reference)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -27,50 +25,66 @@
 
 This is a **RAG (Retrieval-Augmented Generation) Chatbot** — a web application that:
 
-1. Lets you **upload company documents** (PDF, Word, TXT)
-2. **Splits and embeds** those documents as vectors in a database
-3. When you ask a **question**, it finds the most relevant document chunks
-4. **Passes them to an AI model** (OpenAI GPT or AWS Bedrock Claude) to answer
-5. Shows you **3 answers side-by-side**:
-   - Without context (pure AI knowledge)
-   - With context (uses your uploaded documents)
-   - With guardrail (strictly uses only your documents — no hallucination)
+1. Lets you **upload documents** (PDF, DOCX, TXT, MD, CSV)
+2. **Splits and embeds** those documents as vectors in ChromaDB (a local vector database)
+3. When you **ask a question**, it finds the most relevant document chunks using cosine similarity
+4. **Passes those chunks to a free AI model** (Google Gemini or Groq/Llama) to generate a grounded answer
+5. Shows the answer with **source attribution** — which document and which chunk the answer came from
 
-**Real-world use case:** Upload your company's product manuals, specifications, or SOPs and ask questions like "What are the features of AMI Smart Meter?" — and get accurate answers grounded in your own documents.
+Two front-end options are available:
+- **Option A:** Original Streamlit UI (single Python file, simple)
+- **Option B:** React 18 + FastAPI UI (modern, with word-by-word streaming)
+
+Both options use the **same core RAG pipeline** in `src/`.
 
 ---
 
 ## 2. Project File Map
 
 ```
-Desktop/ai/
-├── ali.py                          ← Simple Python exception practice (not part of app)
-├── exceptions.py                   ← Python exception examples (not part of app)
+rag-chatbot/
 │
-└── rag-chatbot/
-    ├── streamlit_app.py            ← MAIN APP — Streamlit web UI (run this)
-    ├── document_utils.py           ← PDF/DOCX/TXT text extraction + chunking
-    ├── embeddings_utils.py         ← OpenAI embedding generation
-    ├── response_generation.py      ← LLM response generation (OpenAI + Bedrock)
-    │
-    ├── scripts/
-    │   └── setup_database.py       ← ONE-TIME: Creates PostgreSQL tables
-    │
-    ├── tests/
-    │   ├── test_app.py             ← App tests (pytest)
-    │   └── test_database.py        ← Database tests (pytest)
-    │
-    ├── knowledge/                  ← Put sample documents here (currently empty)
-    │
-    ├── requirements.txt            ← Python packages to install
-    ├── .env.example                ← Template for your secrets
-    ├── .env                        ← YOUR secrets (create this, never commit)
-    │
-    ├── README.md                   ← Short readme
-    ├── TECHNICAL_ARCHITECTURE.md   ← Deep technical docs
-    ├── DEPLOYMENT.md               ← Deployment guide
-    ├── USER_GUIDE.md               ← End-user guide
-    └── PROJECT_COMPLETE_GUIDE.md   ← This file
+├── streamlit_app.py              ← Option A: Original Streamlit web UI
+│
+├── backend/
+│   └── main.py                   ← Option B: FastAPI backend (REST + WebSocket)
+│
+├── frontend/                     ← Option B: React 18 frontend
+│   └── src/
+│       ├── App.jsx               ← Root layout
+│       └── components/
+│           ├── Sidebar.jsx       ← Upload, model select, document list
+│           ├── ChatWindow.jsx    ← Chat + streaming WebSocket
+│           └── Message.jsx       ← Message bubbles + markdown + sources
+│
+├── src/                          ← Core RAG pipeline (shared by both UIs)
+│   ├── document_utils.py         ← Text extraction + chunking
+│   ├── embeddings_utils.py       ← Sentence Transformers embeddings
+│   ├── response_generation.py    ← Gemini + Groq LLM calls + streaming
+│   ├── rag_pipeline.py           ← Orchestrates all pipeline steps
+│   └── evaluation.py             ← Retrieval evaluation metrics
+│
+├── scripts/
+│   ├── setup_database.py         ← (Legacy) PostgreSQL setup — not used
+│   └── checking_db.py            ← ChromaDB connection check
+│
+├── tests/
+│   ├── test_app.py               ← Application tests
+│   └── test_database.py          ← Database tests
+│
+├── docs/
+│   ├── TECHNICAL_ARCHITECTURE.md ← Deep technical documentation
+│   ├── USER_GUIDE.md             ← End-user guide
+│   ├── DEPLOYMENT.md             ← Deployment instructions
+│   ├── PROJECT_COMPLETE_GUIDE.md ← This file
+│   └── PROJECT_REPORT.md         ← Supervisor/academic explanation
+│
+├── chroma_db/                    ← Local vector database (auto-created)
+├── data/uploads/                 ← Temp folder for uploads
+├── requirements.txt              ← Python dependencies
+├── .env                          ← Your secrets (never commit this)
+├── .env.example                  ← Template for .env
+└── README.md
 ```
 
 ---
@@ -80,463 +94,279 @@ Desktop/ai/
 ### A. Document Upload Flow
 
 ```
-You upload a PDF/DOCX/TXT file
+User uploads PDF / DOCX / TXT / MD / CSV
         ↓
-Text is extracted (pdfplumber / python-docx)
+Text extracted using format-specific parser:
+  - PDF  → PyMuPDF (fitz)
+  - DOCX → python-docx
+  - CSV  → pandas
+  - TXT / MD → built-in file read
         ↓
-Text is cleaned (remove extra spaces, normalize newlines)
+Text split into chunks:
+  - Chunk size: 500 characters
+  - Overlap: 50 characters (so context at boundaries is not lost)
         ↓
-Text is split into ~1000-character chunks with 200-char overlap
-(overlap keeps context at boundaries)
+Each chunk encoded into a 384-dimensional vector
+  using Sentence Transformers (all-MiniLM-L6-v2)
+  — runs LOCALLY on your machine, no API needed
         ↓
-Each chunk gets prefixed: "Product: filename\n\n[chunk text]"
-        ↓
-OpenAI generates a 1536-dimension vector for each chunk
-(in batches of 128 for speed)
-        ↓
-Document metadata + all chunks + their vectors → saved to PostgreSQL
+Chunks + vectors + metadata saved to ChromaDB
+  stored in ./chroma_db/ on disk (persistent)
 ```
 
-### B. Chat / Query Flow
+### B. Query / Chat Flow
 
 ```
-You type: "What voltage does AMI meter support?"
+User types: "What does the document say about [topic]?"
         ↓
-OpenAI generates a vector for your question
+Question encoded into 384-dim vector
+  (same Sentence Transformers model)
         ↓
-PostgreSQL uses pgvector <-> operator to find nearest chunk vectors
-(HNSW index makes this fast even with thousands of chunks)
+ChromaDB cosine similarity search:
+  finds top-K chunks closest to the question vector
+  (default K = 5)
         ↓
-Top-K most similar chunks retrieved, filtered by min_similarity
+Retrieved chunks joined as context string
         ↓
-3 parallel LLM calls:
-  [Col 1] Question only → "Without Context" answer
-  [Col 2] Question + chunks → "With Context" answer
-  [Col 3] Question + chunks + strict rules → "Guardrail" answer
+Prompt built:
+  "Answer ONLY from the context below:
+   [context chunks]
+   Question: [user question]"
         ↓
-All 3 answers shown side-by-side with timing info
+Prompt sent to free LLM API:
+  → Gemini: google.genai.Client → generate_content()
+  → Groq:   groq.Groq → chat.completions.create()
+        ↓
+Answer returned to user with source metadata
+  (filename + chunk number for each source)
 ```
 
-### C. Enhanced Embeddings (Optional)
+### C. Streaming (React UI)
 
 ```
-For better specific-attribute searches:
+User sends question via WebSocket connection
         ↓
-GPT-4o-mini reads each chunk and extracts structured JSON:
-  {"product_name": "AMI Meter", "voltage": "240V", "features": [...]}
+FastAPI backend retrieves context (same as above)
         ↓
-That JSON gets embedded (instead of raw text)
+LLM API called in streaming mode:
+  → Gemini: generate_content_stream()
+  → Groq:   completions.create(stream=True)
         ↓
-Stored as embedding_type='enhanced' (original stays as 'general')
+Each token (word/part) sent to browser via WebSocket
+  as JSON: {"token": "word", "done": false}
         ↓
-You can switch between general/enhanced in the sidebar
+React appends each token to the displayed message
+  (user sees answer appearing word by word)
+        ↓
+Final WebSocket message: {"done": true, "sources": [...]}
 ```
 
 ---
 
-## 4. System Requirements
+## 4. All Code Files Explained
 
-### Required
-| Component | Version | Status |
-|-----------|---------|--------|
-| Python | 3.9+ | ✅ 3.11.9 installed |
-| PostgreSQL | 12+ | ❌ Must install |
-| pgvector extension | 0.4+ | ❌ Install after PostgreSQL |
-| OpenAI API Key | — | ❌ Must obtain |
+### `src/document_utils.py`
 
-### Optional (for AWS Bedrock models)
-| Component | Version |
-|-----------|---------|
-| AWS Account with Bedrock access | — |
-| AWS Access Key + Secret | — |
-| Bedrock model access enabled | — |
+Handles reading and chunking documents.
 
-### Python Packages (auto-installed via requirements.txt)
-| Package | Purpose |
+**Classes:**
+
+`DocumentProcessor`
+- `process_file(path)` — detects format, calls correct parser, returns `(text, metadata)`
+
+`TextChunker`
+- `chunk_text(text)` — splits long text into overlapping windows of 500 characters
+
+**Why overlap?** When a sentence falls at the boundary of two chunks, the 50-char overlap ensures it appears fully in at least one chunk. This prevents losing context at chunk edges.
+
+---
+
+### `src/embeddings_utils.py`
+
+Generates vector representations of text.
+
+**Class: `EmbeddingsManager`**
+- Model: `sentence-transformers/all-MiniLM-L6-v2`
+- Output: 384-dimensional float vectors
+- Runs on CPU locally — no API key, no cost, no internet
+- `get_embeddings(texts)` — batch encode list of strings
+- `get_query_embedding(query)` — encode a single query string
+
+**Why Sentence Transformers?** They are free, run locally, and produce semantically meaningful vectors where similar texts produce similar vectors. The model is small (~80MB) but effective for document retrieval.
+
+---
+
+### `src/response_generation.py`
+
+Handles all communication with LLM APIs.
+
+**Class: `ResponseGenerator`**
+
+| Method | Purpose |
+|--------|---------|
+| `_init_gemini()` | Initialise Google Gemini client |
+| `_init_groq()` | Initialise Groq client |
+| `generate_response(question, context)` | Standard call — waits for full response |
+| `stream_response(question, context)` | Generator — yields tokens one by one |
+| `_stream_gemini(prompt)` | Gemini streaming with model fallback chain |
+| `_stream_groq(prompt)` | Groq streaming |
+| `_build_prompt(question, context)` | Builds the instruction prompt |
+
+**Gemini model fallback:** Tries `gemini-2.5-flash` first, then falls back to `gemini-2.0-flash`, etc. This ensures the app keeps working even if a specific model becomes unavailable on the free tier.
+
+---
+
+### `src/rag_pipeline.py`
+
+Orchestrates the full pipeline end-to-end.
+
+**Class: `RAGPipeline`**
+
+| Method | What it does |
+|--------|-------------|
+| `__init__(llm_provider)` | Initialises all components, connects to ChromaDB |
+| `ingest_document(file_path)` | Extract → chunk → embed → store |
+| `query(question, top_k)` | Embed query → search → build context → generate response |
+| `get_stats()` | Return chunk count + query history |
+| `clear_all()` | Delete ChromaDB collection |
+
+---
+
+### `src/evaluation.py`
+
+Measures retrieval quality for academic evaluation.
+
+**Class: `RAGEvaluator`**
+- `evaluate_retrieval(query, expected_keywords)` — checks how many expected keywords appear in retrieved chunks. Returns a recall score (0 to 1).
+- `run_test_suite(test_cases)` — runs multiple test cases and saves results to `evaluation/eval_results.json`
+
+---
+
+### `streamlit_app.py`
+
+The original single-file Streamlit web application. Contains all UI and pipeline logic in one file, using `st.session_state` to persist objects across page interactions.
+
+Key session state objects:
+- `embeddings_manager` — loaded once, reused for all queries
+- `response_generators` — one per provider, cached to avoid re-initialising API clients
+- `collection` — ChromaDB collection handle
+- `documents` — list of uploaded document metadata
+- `messages` — chat history
+
+---
+
+### `backend/main.py`
+
+FastAPI backend exposing the RAG pipeline via REST endpoints and WebSocket.
+
+**Endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/stats` | Return `{doc_count, chunk_count}` |
+| `GET` | `/api/documents` | List all ingested documents |
+| `POST` | `/api/upload` | Upload + process a document file |
+| `DELETE` | `/api/documents` | Clear all documents |
+| `WebSocket` | `/ws/chat` | Streaming chat |
+
+The `RAGPipeline` is initialised once at application startup and shared across all requests via `app.state.pipeline`.
+
+---
+
+## 5. System Requirements
+
+| Component | Minimum | Notes |
+|-----------|---------|-------|
+| Python | 3.9+ | 3.11 recommended |
+| RAM | 4 GB | 8 GB for large documents |
+| Disk | 500 MB | For model cache + ChromaDB |
+| Internet | Yes | For Gemini/Groq API calls only |
+| Node.js | 18+ | React UI only |
+
+No GPU required. No database server required. No paid API keys required.
+
+---
+
+## 6. Setup Instructions
+
+### Step 1 — Install Python packages
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 2 — Create `.env` file
+
+```bash
+# Windows
+copy .env.example .env
+
+# macOS / Linux
+cp .env.example .env
+```
+
+Edit `.env`:
+```env
+GEMINI_API_KEY=your_gemini_key_here
+GROQ_API_KEY=your_groq_key_here
+LLM_PROVIDER=gemini
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
+TOP_K=5
+```
+
+### Step 3 — (React UI only) Install frontend packages
+
+```bash
+cd frontend
+npm install
+```
+
+---
+
+## 7. Running the App
+
+### Streamlit UI
+
+```bash
+streamlit run streamlit_app.py
+# → http://localhost:8501
+```
+
+### React + FastAPI UI
+
+```bash
+# Terminal 1 — backend
+uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+# → http://localhost:5173
+```
+
+---
+
+## 8. Environment Variables Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_API_KEY` | — | Google Gemini API key (free tier) |
+| `GROQ_API_KEY` | — | Groq API key (free tier) |
+| `LLM_PROVIDER` | `gemini` | Default LLM: `gemini` or `groq` |
+| `CHUNK_SIZE` | `500` | Characters per chunk |
+| `CHUNK_OVERLAP` | `50` | Overlap characters between chunks |
+| `TOP_K` | `5` | Default chunks to retrieve per query |
+
+---
+
+## 9. Troubleshooting
+
+| Problem | Solution |
 |---------|---------|
-| streamlit 1.x | Web UI framework |
-| openai 1.x | Embeddings + GPT chat |
-| boto3 | AWS Bedrock calls |
-| psycopg2-binary | PostgreSQL driver |
-| pdfplumber | PDF text extraction |
-| python-docx | DOCX text extraction |
-| python-dotenv | Load .env file |
-| pgvector | Vector type helpers |
-| pytest + pytest-cov | Testing |
-
----
-
-## 5. Setup Instructions (Full)
-
-### Step 1: Install PostgreSQL
-
-Download from: https://www.postgresql.org/download/windows/
-
-- Use the installer wizard
-- Default port: **5432**
-- Set a password for `postgres` user
-- **Important:** Check the box to include Stack Builder after install
-
-### Step 2: Install pgvector Extension
-
-Option A — Via Stack Builder (easiest):
-1. Open Stack Builder (comes with PostgreSQL)
-2. Go to: Database Extensions → pgvector
-3. Install it
-
-Option B — Manual:
-1. Download from https://github.com/pgvector/pgvector/releases
-2. Follow the Windows instructions in their README
-
-Option C — Via psql command (after PostgreSQL is running):
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-### Step 3: Create Database and User
-
-Open **pgAdmin** (installed with PostgreSQL) or **psql**, then run:
-
-```sql
--- Create the database user
-CREATE USER admin WITH PASSWORD 'your_secure_password';
-
--- Create the database
-CREATE DATABASE admin OWNER admin;
-
--- Grant privileges
-GRANT ALL PRIVILEGES ON DATABASE admin TO admin;
-```
-
-### Step 4: Copy .env.example → .env
-
-```
-cd "C:\Users\MDAliKhan\OneDrive - Sinhal Udyog pvt ltd\Desktop\ai\rag-chatbot"
-copy .env.example .env
-```
-
-Then open `.env` in Notepad and fill in:
-
-```env
-OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxx    ← Get from platform.openai.com
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=admin
-DB_USER=admin
-DB_PASSWORD=your_secure_password              ← What you set in Step 3
-```
-
-### Step 5: Install Python Packages
-
-```bash
-cd "C:\Users\MDAliKhan\OneDrive - Sinhal Udyog pvt ltd\Desktop\ai\rag-chatbot"
-pip install -r requirements.txt
-```
-
-### Step 6: Create Database Tables (one-time)
-
-```bash
-cd "C:\Users\MDAliKhan\OneDrive - Sinhal Udyog pvt ltd\Desktop\ai\rag-chatbot"
-python scripts/setup_database.py
-```
-
-Expected output:
-```
-Loading configuration from environment...
-Connecting to database...
-Creating pgvector extension if not exists...
-Creating table: company_documents
-Creating table: document_chunks
-Creating table: conversations
-Creating HNSW index on document_chunks.embedding (vector)
-Creating B-tree indexes...
-Granting privileges to user 'admin'...
-All expected tables exist: ['company_documents', 'conversations', 'document_chunks']
-Database schema setup completed successfully.
-```
-
----
-
-## 6. Running the App
-
-```bash
-cd "C:\Users\MDAliKhan\OneDrive - Sinhal Udyog pvt ltd\Desktop\ai\rag-chatbot"
-streamlit run streamlit_app.py
-```
-
-The app opens automatically in your browser at: **http://localhost:8501**
-
-To stop the app: press `Ctrl+C` in the terminal.
-
----
-
-## 7. Using the App
-
-### Tab 1: Knowledge Base Upload
-
-1. Click **"Browse files"** → select a PDF, DOCX, or TXT
-2. Click **"Process and Upload"**
-3. Watch the progress bar as embeddings are generated
-4. The document appears in the "Existing Documents" list below
-
-### Tab 2: Chat
-
-**Sidebar controls:**
-- **Provider:** OpenAI or AWS Bedrock
-- **Model:** Select GPT-4o, GPT-4o-mini, etc. (or Claude models for Bedrock)
-- **Top K:** How many document chunks to retrieve (1-10, default 5)
-- **Min Similarity:** Minimum relevance score (0.0-1.0, default 0.4)
-- **Enhanced Embeddings:** Toggle for attribute-specific search
-
-**Asking a question:**
-1. Type your question in the text box
-2. Click **Send**
-3. Three columns appear with answers:
-   - 🔵 **Without Context:** Pure AI knowledge (baseline)
-   - 🟢 **With Context:** AI uses your uploaded documents
-   - 🟡 **With Context + Guardrail:** Strictly uses only your documents
-
-**Understanding the similarity scores:**
-- Shown as `similarity: 0.750` — higher is more relevant
-- Scores near 1.0 = very close match
-- Scores below 0.4 are filtered out by default
-
----
-
-## 8. All Code Files Explained
-
-### `streamlit_app.py` — The Main App
-
-The entry point. Runs the entire web UI.
-
-**Key sections:**
-| Lines | What it does |
-|-------|-------------|
-| 1-22 | Imports (including response generation functions) |
-| 23-65 | Loads config from .env + defines model lists |
-| 70-114 | Cached client factories (OpenAI, Bedrock, DB connection) |
-| 120-175 | Database helper functions (store, get, delete documents) |
-| 180-290 | Tab 1: Document upload UI |
-| 290-595 | Tab 2: Chat UI + sidebar + 3-column response display |
-| 420-470 | `search_similar_chunks()` — vector search helper |
-
----
-
-### `document_utils.py` — Text Processing
-
-**Functions:**
-
-| Function | Input | Output |
-|----------|-------|--------|
-| `extract_text_from_pdf(bytes, filename)` | PDF bytes | Clean text string |
-| `extract_text_from_docx(bytes)` | DOCX bytes | Clean text string |
-| `extract_text_from_txt(bytes)` | Text bytes | Clean text string |
-| `clean_extracted_text(text)` | Raw text | Normalized text |
-| `chunk_text(text, size, overlap)` | Text + params | List of chunk dicts |
-
-**Chunking algorithm:**
-```
-chunk_text("long text...", chunk_size=1000, overlap=200)
-
-Returns:
-[
-  {"content": "first 1000 chars...", "start_pos": 0, "end_pos": 998},
-  {"content": "chars 798-1800...",    "start_pos": 798, "end_pos": 1800},
-  ...
-]
-```
-- Tries to break at sentence boundaries (`. ` or `\n`) after 50% of chunk_size
-- Each chunk overlaps the previous by `overlap` characters
-
----
-
-### `embeddings_utils.py` — Vector Generation
-
-**Functions:**
-
-| Function | What it does |
-|----------|-------------|
-| `create_embedding(text, client)` | Single text → 1536-dim vector |
-| `create_embeddings_batch(texts, client)` | List of texts → list of vectors (retries 3x with backoff) |
-| `generate_enhanced_json(product, content, client)` | Uses GPT-4o-mini to extract structured JSON from a chunk |
-| `generate_enhanced_embeddings_for_all(client)` | Generates enhanced versions of all uploaded chunks |
-
-**Vector dimension:** 1536 (from `text-embedding-3-small` model)
-
----
-
-### `response_generation.py` — LLM Integration
-
-**Three response functions — all return `(answer: str, time: float)`:**
-
-| Function | Temperature | Behavior |
-|----------|-------------|---------|
-| `generate_response_without_context(question, model, client, provider)` | 0.7 | No document context |
-| `generate_response_with_context(question, chunks, model, client, provider)` | 0.7 | Uses all retrieved chunks, synthesizes |
-| `generate_response_with_guardrail(question, chunks, model, client, provider)` | 0.3 | Strictly only uses provided context, refuses to use external knowledge |
-
-**Provider support:**
-- `provider="OpenAI"` → calls `client.chat.completions.create()`
-- `provider="Bedrock"` → calls `client.invoke_model()` (boto3 bedrock-runtime)
-
----
-
-### `scripts/setup_database.py` — Database Setup
-
-Run **once** to create all tables, indexes, and grant permissions.
-
-Creates:
-- `company_documents` table
-- `document_chunks` table (with 1536-dim vector column)
-- `conversations` table
-- HNSW vector index (fast similarity search)
-- B-tree indexes on document_id, product_name, filename
-
----
-
-## 9. Database Schema
-
-### `company_documents` — Document Registry
-
-```
-id          | SERIAL PRIMARY KEY
-filename    | VARCHAR(255)    — e.g., "product_spec.pdf"
-file_type   | VARCHAR(50)     — "pdf", "docx", "txt"
-file_path   | TEXT            — (empty string for uploaded files)
-total_chunks| INTEGER         — how many chunks this doc has
-uploaded_at | TIMESTAMP       — auto set on insert
-metadata    | JSONB           — {"product_name": "AMI Meter"}
-```
-
-### `document_chunks` — Text + Vectors
-
-```
-id            | SERIAL PRIMARY KEY
-document_id   | INTEGER → company_documents(id) ON DELETE CASCADE
-chunk_index   | INTEGER         — 0, 1, 2... within the document
-filename      | VARCHAR(255)
-product_name  | VARCHAR(100)    — derived from filename (without extension)
-content       | TEXT            — the actual chunk text
-content_length| INTEGER
-embedding     | vector(1536)    — the pgvector column
-chunk_metadata| JSONB           — {"start_pos": 0, "end_pos": 998}
-embedding_type| VARCHAR(20)     — "general" or "enhanced"
-created_at    | TIMESTAMP
-```
-
-### `conversations` — Chat History
-
-```
-id            | SERIAL PRIMARY KEY
-session_id    | UUID
-user_question | TEXT
-bot_response  | TEXT
-chunks_used   | INTEGER[]       — IDs of chunks that were used
-created_at    | TIMESTAMP
-```
-
----
-
-## 10. Bugs Fixed
-
-The following bugs were found and fixed before this project can run:
-
-| # | File | Bug | Fix Applied |
-|---|------|-----|-------------|
-| 1 | `streamlit_app.py` | `generate_response_*` functions used but never imported | Added `from response_generation import ...` |
-| 2 | `streamlit_app.py` | Response functions return `(answer, time)` tuple but code treated them as plain strings — would display `('answer text', 0.42)` instead of just the answer | Changed to `ans, elapsed = generate_response_...()` |
-| 3 | `streamlit_app.py` | `st.experimental_rerun()` deprecated in Streamlit 1.27+, raises `AttributeError` in newer versions | Replaced all 3 calls with `st.rerun()` |
-| 4 | `streamlit_app.py` | boto3 `"bedrock"` service name is for management API — `invoke_model` requires `"bedrock-runtime"` | Changed to `"bedrock-runtime"` |
-| 5 | `streamlit_app.py` | When Bedrock provider selected, Bedrock client was passed to embedding search — but embeddings always need OpenAI | Fixed to always use `openai_client` for embeddings |
-| 6 | `embeddings_utils.py` | `from openai.error import OpenAIError` — old v0.x path, doesn't exist in openai>=1.0.0 | Changed to `from openai import OpenAIError` |
-| 7 | `response_generation.py` | Same `openai.error` import bug | Same fix |
-| 8 | `requirements.txt` | `pgvector>=0.5.2` — latest version is 0.4.2, install fails | Changed to `pgvector>=0.1.0` |
-
----
-
-## 11. Environment Variables Reference
-
-Create `.env` in the `rag-chatbot/` folder:
-
-```env
-# ── REQUIRED ──────────────────────────────────────────────
-OPENAI_API_KEY=sk-proj-...          # Get from platform.openai.com/api-keys
-
-# ── DATABASE ──────────────────────────────────────────────
-DB_HOST=127.0.0.1                   # localhost
-DB_PORT=5432                        # PostgreSQL default
-DB_NAME=admin                       # database name you created
-DB_USER=admin                       # database user you created
-DB_PASSWORD=your_password           # password you set
-
-# ── OPTIONAL: AWS Bedrock ─────────────────────────────────
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=ap-south-1
-
-# ── OPTIONAL: Tuning ──────────────────────────────────────
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-RAG_CHUNK_SIZE=1000
-RAG_CHUNK_OVERLAP=200
-LOG_LEVEL=INFO
-```
-
----
-
-## 12. Troubleshooting
-
-### "connection refused" or DB errors
-- Check PostgreSQL service is running: `services.msc` → look for `postgresql-x64-XX`
-- Verify DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD in `.env`
-
-### "OpenAI API key not found" / AuthenticationError
-- Make sure `.env` file exists in the `rag-chatbot/` folder
-- Check `OPENAI_API_KEY` is set correctly (no extra spaces)
-- Make sure your OpenAI account has credits
-
-### "vector type not found" or pgvector errors
-- Run in psql: `CREATE EXTENSION IF NOT EXISTS vector;`
-- pgvector must be installed for your PostgreSQL version
-
-### "relation does not exist"
-- Run the setup script: `python scripts/setup_database.py`
-
-### App doesn't start
-```bash
-# Check Python version (need 3.9+)
-python --version
-
-# Check streamlit installed
-pip show streamlit
-
-# Try installing dependencies again
-pip install -r requirements.txt
-```
-
-### "No relevant chunks found" in chat
-- Make sure you uploaded at least one document in Tab 1
-- Lower the "Min Similarity" slider (try 0.2 or 0.1)
-- Increase "Top K" slider
-
----
-
-## Quick Start Commands (All-in-One)
-
-```bash
-# 1. Navigate to project
-cd "C:\Users\MDAliKhan\OneDrive - Sinhal Udyog pvt ltd\Desktop\ai\rag-chatbot"
-
-# 2. Install packages
-pip install -r requirements.txt
-
-# 3. Create .env (copy template, then edit it)
-copy .env.example .env
-# → Open .env and fill in OPENAI_API_KEY + DB_PASSWORD
-
-# 4. Create database tables (one-time)
-python scripts/setup_database.py
-
-# 5. Run the app
-streamlit run streamlit_app.py
-# → Opens at http://localhost:8501
-```
+| `GEMINI_API_KEY not found` | Check `.env` exists in project root with correct key |
+| `All Gemini models failed` | Try switching to Groq; check internet connection |
+| First startup very slow | Normal — embedding model downloads once (~80MB) |
+| React UI shows blank page | Make sure FastAPI backend is running on port 8000 |
+| `No documents` in chat | Upload at least one file via the sidebar first |
+| ChromaDB error | Delete `chroma_db/` folder and restart |
+| PDF fails to upload | Ensure PDF is text-based, not a scanned image |

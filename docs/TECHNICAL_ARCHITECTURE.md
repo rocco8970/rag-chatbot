@@ -5,35 +5,34 @@
 2. [Architecture Components](#architecture-components)
 3. [Data Flow](#data-flow)
 4. [Technology Stack](#technology-stack)
-5. [Database Schema](#database-schema)
-6. [Core Modules](#core-modules)
-7. [Embedding Strategy](#embedding-strategy)
-8. [Vector Search Implementation](#vector-search-implementation)
-9. [Response Generation Pipeline](#response-generation-pipeline)
-10. [Security & Configuration](#security--configuration)
+5. [Core Modules](#core-modules)
+6. [Embedding Strategy](#embedding-strategy)
+7. [Vector Search Implementation](#vector-search-implementation)
+8. [Response Generation Pipeline](#response-generation-pipeline)
+9. [Security & Configuration](#security--configuration)
+10. [Future Enhancements](#future-enhancements)
 
 ---
 
 ## System Overview
 
-The RAG (Retrieval-Augmented Generation) Chatbot is a production-ready knowledge base system that combines document processing, vector embeddings, semantic search, and large language models to provide accurate, context-aware responses to user queries.
+The RAG (Retrieval-Augmented Generation) Chatbot is a knowledge base system that combines document processing, local vector embeddings, semantic search, and free large language models to provide accurate, context-aware responses to user queries. It runs entirely on free APIs and local models — no paid services required.
 
 ### Key Capabilities
-- Multi-format document ingestion (PDF, DOCX, TXT)
+- Multi-format document ingestion (PDF, DOCX, TXT, MD, CSV)
 - Intelligent text chunking with overlap
-- Dual embedding strategy (general + enhanced)
-- Vector similarity search using pgvector
-- Multi-provider LLM support (OpenAI, AWS Bedrock)
-- Three response modes: without context, with context, with guardrails
-- Real-time document management
-- Conversation tracking
+- Local embedding generation (no API key needed)
+- Vector similarity search using ChromaDB
+- Dual free LLM support (Google Gemini and Groq/Llama)
+- Source attribution for every answer
+- Real-time document management and statistics
 
 ### Architecture Pattern
-The system follows a **RAG (Retrieval-Augmented Generation)** pattern:
-1. Documents are processed and stored as vector embeddings
-2. User queries are converted to embeddings
-3. Similar document chunks are retrieved via vector search
-4. Retrieved context is provided to LLM for response generation
+The system follows the **RAG (Retrieval-Augmented Generation)** pattern:
+1. Documents are processed and stored as vector embeddings in ChromaDB
+2. User queries are converted to embeddings using the same local model
+3. Similar document chunks are retrieved via cosine similarity search
+4. Retrieved context is provided to a free LLM for response generation
 
 ---
 
@@ -44,36 +43,39 @@ The system follows a **RAG (Retrieval-Augmented Generation)** pattern:
 │                     Streamlit Web UI                        │
 │  (streamlit_app.py)                                         │
 │  - Document Upload Interface                                │
-│  - Chat Interface                                           │
-│  - Model Configuration                                      │
+│  - Chat Interface with source attribution                   │
+│  - LLM Provider Selection (Gemini / Groq)                  │
+│  - Statistics Dashboard                                     │
 └────────────────┬────────────────────────────────────────────┘
                  │
-                 ├──────────────────┬──────────────────┬───────────────
-                 │                  │                  │
-        ┌────────▼────────┐ ┌──────▼──────┐  ┌───────▼────────┐
-        │ Document Utils  │ │ Embeddings  │  │   Response     │
-        │ (document_      │ │   Utils     │  │  Generation    │
-        │  utils.py)      │ │ (embeddings_│  │ (response_     │
-        │                 │ │  utils.py)  │  │  generation.py)│
-        │ - PDF Extract   │ │ - OpenAI    │  │ - OpenAI Chat  │
-        │ - DOCX Extract  │ │   Embed     │  │ - Bedrock      │
-        │ - Text Clean    │ │ - Batch     │  │   Invoke       │
-        │ - Chunking      │ │   Process   │  │ - 3 Modes      │
-        └─────────────────┘ └─────────────┘  └────────────────┘
-                 │                  │                  │
-                 └──────────────────┴──────────────────┘
+                 ├──────────────────┬──────────────────┐
+                 │                  │                   │
+        ┌────────▼────────┐ ┌──────▼──────┐  ┌────────▼────────┐
+        │ Document Utils  │ │  Embeddings │  │    Response     │
+        │ (document_      │ │    Utils    │  │   Generation    │
+        │  utils.py)      │ │ (embeddings_│  │ (response_      │
+        │                 │ │  utils.py)  │  │  generation.py) │
+        │ - PDF (PyMuPDF) │ │ - Sentence  │  │ - Google Gemini │
+        │ - DOCX          │ │   Transformers  - Groq / Llama  │
+        │ - TXT / MD      │ │ - all-MiniLM│  │ - Prompt        │
+        │ - CSV           │ │   -L6-v2    │  │   building      │
+        │ - Chunking      │ │ - 384-dim   │  │ - Fallback      │
+        │   (500/50)      │ │ - LOCAL     │  │   model logic   │
+        └─────────────────┘ └─────────────┘  └─────────────────┘
+                 │                  │                   │
+                 └──────────────────┴───────────────────┘
                                     │
                     ┌───────────────▼────────────────┐
-                    │   PostgreSQL + pgvector        │
+                    │          ChromaDB              │
+                    │   (Persistent Vector Store)    │
                     │                                │
-                    │  Tables:                       │
-                    │  - company_documents           │
-                    │  - document_chunks             │
-                    │  - conversations               │
+                    │  Collection: "documents"       │
+                    │  - Text chunks                 │
+                    │  - 384-dim embeddings          │
+                    │  - Source metadata             │
                     │                                │
-                    │  Indexes:                      │
-                    │  - HNSW vector index           │
-                    │  - B-tree metadata indexes     │
+                    │  Index: cosine similarity      │
+                    │  Path: ./chroma_db/            │
                     └────────────────────────────────┘
 ```
 
@@ -83,40 +85,36 @@ The system follows a **RAG (Retrieval-Augmented Generation)** pattern:
 
 ### Document Upload Flow
 ```
-1. User uploads document (PDF/DOCX/TXT)
+1. User uploads document (PDF / DOCX / TXT / MD / CSV)
    ↓
-2. Extract text using format-specific parser
+2. Save to temporary file
    ↓
-3. Clean and normalize text
+3. Extract text using format-specific parser
    ↓
-4. Split into overlapping chunks (1000 chars, 200 overlap)
+4. Split into overlapping chunks (500 chars, 50 char overlap)
    ↓
-5. Prefix each chunk with product metadata
+5. Generate embeddings locally using Sentence Transformers
    ↓
-6. Generate embeddings in batches (128 chunks/batch)
+6. Store chunks + embeddings + metadata in ChromaDB
    ↓
-7. Store document metadata + chunks + embeddings in PostgreSQL
-   ↓
-8. Create vector indexes for fast similarity search
+7. Display success with chunk count in sidebar
 ```
 
 ### Query Processing Flow
 ```
 1. User submits question
    ↓
-2. Generate query embedding using OpenAI
+2. Generate query embedding using same local Sentence Transformers model
    ↓
-3. Perform vector similarity search (pgvector <-> operator)
+3. Perform cosine similarity search in ChromaDB (top-k chunks)
    ↓
-4. Filter results by minimum similarity threshold
+4. Join retrieved chunks into context string
    ↓
-5. Retrieve top-k most similar chunks
+5. Build structured prompt (context + question + instructions)
    ↓
-6. Format context from retrieved chunks
+6. Send to selected LLM (Gemini or Groq) via free API
    ↓
-7. Generate response using selected LLM provider
-   ↓
-8. Display response with metadata (time, sources)
+7. Display answer with expandable source attribution
 ```
 
 ---
@@ -124,102 +122,37 @@ The system follows a **RAG (Retrieval-Augmented Generation)** pattern:
 ## Technology Stack
 
 ### Frontend
-- **Streamlit 1.10+**: Web UI framework
-  - Multi-tab interface
-  - File upload handling
-  - Real-time progress indicators
-  - Session state management
+- **Streamlit 1.31+**: Web UI framework
+  - Session state management for chat history and loaded models
+  - File upload handling with progress indicators
+  - Glass morphism custom CSS design
 
 ### Backend Processing
 - **Python 3.9+**: Core language
-- **pdfplumber 0.7.4+**: PDF text extraction
-- **python-docx 0.8.11+**: DOCX parsing
-- **psycopg2-binary 2.9+**: PostgreSQL driver
+- **PyMuPDF (fitz) 1.23+**: PDF text extraction
+- **python-docx 1.1+**: DOCX parsing
+- **pandas 2.1+**: CSV handling
 
-### AI/ML Services
-- **OpenAI API 1.0+**: 
-  - Embeddings: `text-embedding-3-small` (1536 dimensions)
-  - Chat: `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo`
-- **AWS Bedrock (boto3 1.26+)**:
-  - Claude models: `claude-3.5-sonnet`, `claude-3-haiku`
-  - Titan models: `amazon.titan-text-001`
+### AI / ML — All Free
+- **Sentence Transformers 2.5+** (local, no API key):
+  - Model: `all-MiniLM-L6-v2`
+  - Output: 384-dimensional vectors
+  - Runs entirely on local CPU/GPU
+- **Google Gemini API** (free tier):
+  - Primary model: `gemini-2.5-flash`
+  - Fallback chain: `gemini-2.0-flash` → `gemini-2.0-flash-001` → `gemini-2.0-flash-lite`
+- **Groq API** (free tier):
+  - Model: `llama-3.1-8b-instant`
+  - Ultra-fast inference
 
-### Database
-- **PostgreSQL 12+**: Primary data store
-- **pgvector 0.5.2+**: Vector similarity extension
-  - HNSW indexing for fast approximate nearest neighbor search
-  - Cosine similarity metric
-  - 1536-dimensional vectors
+### Vector Database
+- **ChromaDB 0.4+**: Persistent vector store
+  - Cosine similarity metric (`hnsw:space: cosine`)
+  - Stored locally at `./chroma_db/`
+  - No external server required
 
 ### Configuration
-- **python-dotenv 0.21+**: Environment variable management
-
----
-
-## Database Schema
-
-### Table: `company_documents`
-Stores document metadata.
-
-```sql
-CREATE TABLE company_documents (
-    id SERIAL PRIMARY KEY,
-    filename VARCHAR(255) NOT NULL,
-    file_type VARCHAR(50),              -- pdf, docx, txt
-    file_path TEXT,
-    total_chunks INTEGER DEFAULT 0,
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata JSONB                      -- flexible metadata storage
-);
-```
-
-### Table: `document_chunks`
-Stores text chunks with vector embeddings.
-
-```sql
-CREATE TABLE document_chunks (
-    id SERIAL PRIMARY KEY,
-    document_id INTEGER REFERENCES company_documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    filename VARCHAR(255),
-    product_name VARCHAR(100),
-    content TEXT NOT NULL,
-    content_length INTEGER,
-    embedding vector(1536),             -- pgvector type
-    chunk_metadata JSONB,
-    embedding_type VARCHAR(20) DEFAULT 'general',  -- 'general' or 'enhanced'
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(document_id, chunk_index)
-);
-
--- HNSW index for fast vector similarity search
-CREATE INDEX idx_document_chunks_embedding_hnsw
-ON document_chunks
-USING hnsw (embedding vector_cosine_ops)
-WITH (m = 16, ef_construction = 200);
-
--- B-tree indexes for metadata filtering
-CREATE INDEX idx_document_chunks_document_id ON document_chunks(document_id);
-CREATE INDEX idx_document_chunks_product_name ON document_chunks(product_name);
-CREATE INDEX idx_document_chunks_filename ON document_chunks(filename);
-```
-
-### Table: `conversations`
-Tracks user interactions for analytics.
-
-```sql
-CREATE TABLE conversations (
-    id SERIAL PRIMARY KEY,
-    session_id UUID NOT NULL,
-    user_question TEXT NOT NULL,
-    bot_response TEXT,
-    chunks_used INTEGER[],              -- array of chunk IDs used
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_conversations_session_id ON conversations(session_id);
-```
+- **python-dotenv 1.0+**: Environment variable management
 
 ---
 
@@ -227,416 +160,268 @@ CREATE INDEX idx_conversations_session_id ON conversations(session_id);
 
 ### 1. Document Processing (`document_utils.py`)
 
-#### Text Extraction Functions
-- `extract_text_from_pdf(file_bytes, filename)`: Uses pdfplumber for multi-page PDF parsing
-- `extract_text_from_docx(file_bytes)`: Extracts from paragraphs and tables
-- `extract_text_from_txt(file_bytes)`: UTF-8 with latin-1 fallback
+#### `DocumentProcessor`
+Handles text extraction from all supported formats:
 
-#### Text Cleaning
-```python
-clean_extracted_text(text):
-    - Normalize line endings
-    - Collapse multiple spaces/tabs
-    - Remove spaces before punctuation
-    - Limit consecutive newlines to 2
-    - Strip whitespace
+| Format | Library | Notes |
+|--------|---------|-------|
+| PDF | PyMuPDF (fitz) | Multi-page, extracts all text blocks |
+| DOCX | python-docx | Paragraphs and tables |
+| TXT / MD | Built-in | UTF-8 with latin-1 fallback |
+| CSV | pandas | Converts rows to readable text |
+
+#### `TextChunker`
+```
+Parameters: chunk_size=500, chunk_overlap=50
+
+Algorithm:
+1. Walk through text in steps of (chunk_size - chunk_overlap)
+2. Extract windows of chunk_size characters
+3. Consecutive chunks share 50 characters of overlap
+4. Returns list of text strings
 ```
 
-#### Intelligent Chunking
-```python
-chunk_text(text, chunk_size=1000, overlap=200):
-    Algorithm:
-    1. Target chunk_size characters per chunk
-    2. Prefer breaking at sentence boundaries ('. ' or '\n')
-    3. Look for boundaries after 50% of chunk_size
-    4. Overlap consecutive chunks by 'overlap' characters
-    5. Return list of dicts: {content, start_pos, end_pos}
-```
+**Why overlap?** Ensures that a sentence split across a chunk boundary is still present in full in at least one chunk, preserving context for retrieval.
 
-**Chunking Strategy Benefits:**
-- Preserves semantic coherence by breaking at sentences
-- Overlap ensures context continuity across chunks
-- Position tracking enables source attribution
+---
 
 ### 2. Embeddings (`embeddings_utils.py`)
 
-#### Core Functions
+#### `EmbeddingsManager`
 ```python
-create_embedding(text, client, model="text-embedding-3-small"):
-    - Single text → 1536-dim vector
-    - Retry logic with exponential backoff
-    - Error handling for API failures
-
-create_embeddings_batch(texts, client, model):
-    - Batch processing for efficiency
-    - Up to 3 retries with backoff
-    - Progress logging
+Model: sentence-transformers/all-MiniLM-L6-v2
+Dimensions: 384
+Device: auto-detected (CPU / CUDA)
 ```
 
-#### Enhanced Embeddings
-```python
-generate_enhanced_json(product_name, chunk_content, client):
-    - Uses GPT-4o-mini to extract structured metadata
-    - Dynamic JSON schema (only fields with data)
-    - Fields: product_name, specifications, features, etc.
-    - Returns JSON string for embedding
+Key methods:
+- `get_embeddings(texts: List[str]) → np.ndarray` — batch encode document chunks
+- `get_query_embedding(query: str) → np.ndarray` — encode a single user query
 
-generate_enhanced_embeddings_for_all(client, progress_callback):
-    - Processes all 'general' chunks
-    - Generates enhanced JSON representation
-    - Creates new embeddings for enhanced content
-    - Inserts as separate rows with embedding_type='enhanced'
-```
+**Why local embeddings?** No API key, no cost, no rate limits. The `all-MiniLM-L6-v2` model is small (~80MB) but produces high-quality semantic embeddings suitable for document retrieval.
 
-**Dual Embedding Strategy:**
-- **General embeddings**: Direct chunk content
-- **Enhanced embeddings**: Structured metadata extraction
-  - Better for specific queries (specs, features)
-  - Enables hybrid search strategies
+---
 
 ### 3. Response Generation (`response_generation.py`)
 
-#### Three Response Modes
+#### `ResponseGenerator`
+Supports two free LLM providers with a unified interface:
 
-**1. Without Context**
+**Gemini provider:**
 ```python
-generate_response_without_context(question, model, client, provider):
-    - Direct LLM query without RAG
-    - Baseline for comparison
-    - Uses general knowledge only
+Client: google.genai.Client
+Model chain (with automatic fallback):
+  gemini-2.5-flash → gemini-2.0-flash → gemini-2.5-pro
+  → gemini-2.0-flash-001 → gemini-2.0-flash-lite
 ```
 
-**2. With Context**
+**Groq provider:**
 ```python
-generate_response_with_context(question, context_chunks, model, client, provider):
-    - Provides all retrieved chunks to LLM
-    - Instructs to synthesize from ALL passages
-    - Combines information across chunks
-    - Temperature: 0.7 (balanced creativity)
+Client: groq.Groq
+Model: llama-3.1-8b-instant
+Temperature: 0.7
+Max tokens: 1024
 ```
 
-**3. With Guardrail**
-```python
-generate_response_with_guardrail(question, context_chunks, model, client, provider):
-    - Strict: answer ONLY from provided context
-    - Prohibits external knowledge
-    - Allows synthesis and inference from context
-    - Temperature: 0.3 (focused, deterministic)
-    - Prevents hallucination
+#### Prompt Template
+```
+You are a helpful AI assistant. Answer the question based ONLY on the
+context provided below. If the answer is not in the context, say
+"I don't have enough information to answer this question."
+
+CONTEXT:
+{retrieved_chunks_joined}
+
+QUESTION:
+{user_question}
+
+INSTRUCTIONS:
+- Provide a clear, concise answer
+- Use bullet points if listing multiple items
+- Cite specific information from the context
+- Be helpful and friendly
+
+ANSWER:
 ```
 
-#### Provider Abstraction
-```python
-Supports:
-- OpenAI: chat.completions.create()
-- AWS Bedrock: invoke_model() with JSON body
+---
 
-Unified interface:
-- Same function signatures
-- Provider-specific error handling
-- Automatic retry logic
+### 4. RAG Pipeline (`rag_pipeline.py`)
+
+The `RAGPipeline` class orchestrates all components end-to-end:
+
+```python
+pipeline = RAGPipeline(llm_provider="gemini")
+pipeline.ingest_document("myfile.pdf")   # process + store
+result = pipeline.query("What is X?")    # retrieve + generate
+stats  = pipeline.get_stats()            # usage stats
+pipeline.clear_all()                     # reset database
 ```
+
+The Streamlit app implements the same logic inline using `st.session_state` for persistence across page interactions.
+
+---
+
+### 5. Evaluation (`evaluation.py`)
+
+#### `RAGEvaluator`
+Measures retrieval quality with keyword-based recall:
+
+```python
+evaluate_retrieval(query, expected_keywords):
+    recall = keywords_found_in_retrieved_text / total_keywords
+```
+
+Saves full evaluation results to `evaluation/eval_results.json`.
 
 ---
 
 ## Embedding Strategy
 
 ### Vector Representation
-- **Model**: OpenAI `text-embedding-3-small`
-- **Dimensions**: 1536
+- **Model**: `all-MiniLM-L6-v2` (Sentence Transformers)
+- **Dimensions**: 384
 - **Metric**: Cosine similarity
-- **Storage**: PostgreSQL pgvector extension
+- **Storage**: ChromaDB persistent collection
 
-### Embedding Types
+### Why Cosine Similarity?
+Cosine similarity measures the angle between two vectors regardless of magnitude. This makes it robust to differences in document length — a short query and a long chunk can still match well if they discuss the same topic.
 
-#### General Embeddings
-```
-Input: "Product: AMI Smart Meter\n\nThe AMI smart meter features..."
-Process: Direct embedding of prefixed chunk content
-Use case: General semantic search
-```
-
-#### Enhanced Embeddings
-```
-Input: Chunk content
-Process: 
-  1. LLM extracts structured metadata (JSON)
-  2. Embed the JSON representation
-Output: {
-  "product_name": "AMI Smart Meter",
-  "features": ["remote monitoring", "real-time data"],
-  "specifications": {"voltage": "240V", "current": "100A"},
-  "standards": ["IEC 62052-11"]
-}
-Use case: Precise attribute-based queries
-```
-
-### Batch Processing
-- **Batch size**: 128 chunks
-- **Rate limiting**: Exponential backoff on errors
-- **Progress tracking**: Real-time UI updates
-- **Error handling**: Continue on individual failures
+### Embedding at Query Time
+The same model is used for both document chunks and user queries, ensuring vectors live in the same semantic space and similarity scores are meaningful.
 
 ---
 
 ## Vector Search Implementation
 
-### pgvector Configuration
-
-#### Index Type: HNSW (Hierarchical Navigable Small World)
-```sql
-CREATE INDEX idx_document_chunks_embedding_hnsw
-ON document_chunks
-USING hnsw (embedding vector_cosine_ops)
-WITH (m = 16, ef_construction = 200);
-```
-
-**Parameters:**
-- `m = 16`: Max connections per layer (higher = better recall, more memory)
-- `ef_construction = 200`: Build-time search depth (higher = better quality, slower build)
-
-**Fallback: IVFFlat**
-```sql
-CREATE INDEX idx_document_chunks_embedding_ivfflat
-ON document_chunks
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
-```
-
-### Search Query
-```sql
-SELECT id, document_id, content, metadata, 
-       embedding <-> %s::vector AS distance
-FROM document_chunks
-WHERE embedding_type = %s
-ORDER BY embedding <-> %s::vector
-LIMIT %s
-```
-
-**Operator**: `<->` (L2 distance for cosine similarity)
-
-### Similarity Scoring
+### ChromaDB Configuration
 ```python
-# Convert distance to similarity score
-similarity = 1.0 / (1.0 + distance)
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(
+    name="documents",
+    metadata={"hnsw:space": "cosine"}
+)
+```
 
-# Filter by threshold
-filtered_chunks = [c for c in chunks if c['similarity'] >= min_similarity]
+ChromaDB uses an HNSW (Hierarchical Navigable Small World) index internally for fast approximate nearest neighbour search.
+
+### Adding Documents
+```python
+collection.add(
+    documents=chunks,          # raw text (for display)
+    embeddings=embeddings,     # 384-dim float lists
+    metadatas=metadatas,       # source filename, chunk index, timestamp
+    ids=ids                    # unique UUIDs
+)
+```
+
+### Querying
+```python
+results = collection.query(
+    query_embeddings=[query_vector],
+    n_results=top_k            # default 5, configurable 1–10 in UI
+)
+# Returns: documents, metadatas, distances
 ```
 
 ### Search Parameters
-- **top_k**: Number of results (default: 5, range: 1-10)
-- **min_similarity**: Threshold filter (default: 0.4, range: 0.0-1.0)
-- **embedding_type**: 'general' or 'enhanced'
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `top_k` | 5 | 1–10 | Number of chunks to retrieve |
+| `chunk_size` | 500 | — | Characters per chunk |
+| `chunk_overlap` | 50 | — | Shared characters between consecutive chunks |
 
 ---
 
 ## Response Generation Pipeline
 
-### Context Formatting
+### Context Building
+Retrieved chunks are joined with double newlines:
 ```python
-def _build_context_block(context_chunks):
-    parts = []
-    for i, chunk in enumerate(chunks, start=1):
-        parts.append(f"[Context {i}]\n{chunk['content']}")
-    return "\n\n".join(parts)
+context = "\n\n".join(results["documents"][0])
 ```
 
-### Prompt Templates
+### Source Attribution
+Each chunk's metadata (`source`, `chunk_index`) is returned alongside the answer and displayed to the user in an expandable "View sources" section.
 
-#### With Context Template
+### Provider Fallback (Gemini)
+The Gemini provider tries models in sequence and stops at the first success:
 ```
-You are provided with {N} context passages. Read ALL of them carefully 
-and synthesize information to answer comprehensively.
-
-IMPORTANT: Use information from ALL context passages, not just one. 
-Combine and synthesize.
-
-[Context 1]
-{content}
-
-[Context 2]
-{content}
-
-...
-
-Question: {question}
-
-Instructions:
-- Read and analyze ALL {N} passages
-- Combine information from multiple passages
-- Provide comprehensive answer
-- Extract specific details (counts, lists, etc.)
-
-Answer:
+gemini-2.5-flash → gemini-2.0-flash → gemini-2.5-pro
+→ gemini-2.0-flash-001 → gemini-2.0-flash-lite → gemini-flash-latest
 ```
-
-#### Guardrail Template
-```
-You are provided with {N} context passages. Answer based ONLY on this information.
-
-STRICT RULES:
-1. Read ALL {N} passages
-2. Answer ONLY using information in contexts
-3. You MAY synthesize and infer from passages
-4. You MAY count, list, enumerate items mentioned
-5. If contexts have relevant info, use it (can be partial)
-6. ONLY say 'I don't have information' if NO relevant info at all
-7. Do NOT use external knowledge
-
-[Context passages...]
-
-Question: {question}
-
-Answer:
-```
-
-### Performance Metrics
-- **Search time**: Vector similarity query duration
-- **Response time**: LLM generation duration
-- **Total time**: Search + response time
-- Displayed in UI for transparency
+This ensures the app stays functional even if a specific model version becomes unavailable on your API key tier.
 
 ---
 
 ## Security & Configuration
 
-### Environment Variables
+### Environment Variables (`.env`)
 ```bash
-# OpenAI
-OPENAI_API_KEY=sk-...
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+# LLM Providers (free tier)
+GEMINI_API_KEY=your_gemini_key_here
+GROQ_API_KEY=your_groq_key_here
 
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=rag_db
-DB_USER=admin
-DB_PASSWORD=secure_password
+# Default provider
+LLM_PROVIDER=gemini
 
-# AWS Bedrock (optional)
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=us-east-1
-
-# Application
-RAG_CHUNK_SIZE=1000
-RAG_CHUNK_OVERLAP=200
+# RAG parameters
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
+TOP_K=5
 ```
 
 ### Security Best Practices
-1. **Credentials**: Never commit `.env` to version control
-2. **File permissions**: `chmod 600 .env`
-3. **Database**: Strong passwords, restricted network access
-4. **API keys**: Rotate regularly, use least-privilege
-5. **HTTPS**: Use reverse proxy (nginx) for production
-6. **Rate limiting**: Implement for public-facing deployments
+1. **Never commit `.env`** — it is listed in `.gitignore`
+2. **Use `.env.example`** as the template for sharing setup instructions
+3. **API keys are read-only at runtime** via `python-dotenv`
+4. **ChromaDB is local** — no network exposure of your documents
 
-### Caching Strategy
+### Session State Caching
+Expensive objects are initialised once per browser session:
 ```python
-@st.cache_resource
-def get_openai_client(api_key):
-    return OpenAI(api_key=api_key)
+# Embeddings model loaded once (~1 min first time)
+st.session_state.embeddings_manager = EmbeddingsManager()
 
-@st.cache_resource
-def get_db_conn():
-    return psycopg2.connect(...)
+# LLM clients created once per provider, reused across queries
+st.session_state.response_generators[provider] = ResponseGenerator(provider)
 ```
-
-**Benefits:**
-- Reuse connections across requests
-- Reduce initialization overhead
-- Improve response times
 
 ---
 
 ## Performance Considerations
 
-### Database Optimization
-- **HNSW index**: Fast approximate nearest neighbor (ANN) search
-- **B-tree indexes**: Quick metadata filtering
-- **Connection pooling**: Reuse database connections
-- **Batch operations**: Minimize round trips
-
 ### Embedding Generation
-- **Batch size**: 128 chunks (balance speed vs. memory)
-- **Parallel processing**: Future enhancement opportunity
-- **Caching**: Store embeddings, don't regenerate
+- Model loads once into memory at app startup
+- Subsequent uploads embed chunks in a single batch call
+- No API calls or internet needed for embeddings
 
-### LLM Optimization
-- **Context window**: Limit to top-k chunks (avoid token limits)
-- **Temperature tuning**: Lower for factual, higher for creative
-- **Model selection**: Balance cost, speed, quality
+### LLM Latency
+- **Groq**: Typically 1–3 seconds (optimised hardware inference)
+- **Gemini**: Typically 2–5 seconds (free tier)
 
-### Scalability
-- **Horizontal**: Multiple Streamlit instances behind load balancer
-- **Vertical**: Increase PostgreSQL resources for larger datasets
-- **Caching**: Redis for frequently accessed chunks
-- **CDN**: Static assets and document storage
-
----
-
-## Monitoring & Observability
-
-### Metrics to Track
-- Document upload success rate
-- Embedding generation time
-- Search latency (p50, p95, p99)
-- LLM response time
-- Error rates by component
-- Database query performance
-
-### Logging
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Log key events
-logger.info(f"Document uploaded: {filename}, chunks: {len(chunks)}")
-logger.error(f"Embedding generation failed: {error}")
-```
-
-### Health Checks
-- Database connectivity
-- OpenAI API availability
-- Bedrock endpoint status
-- Disk space for logs
-- Memory usage
+### ChromaDB
+- Persistent storage means embeddings survive app restarts
+- HNSW index makes similarity search sub-second even for thousands of chunks
 
 ---
 
 ## Future Enhancements
 
-### Technical Improvements
-1. **Hybrid search**: Combine vector + keyword (BM25)
-2. **Reranking**: Use cross-encoder for better relevance
-3. **Streaming responses**: Real-time LLM output
-4. **Multi-modal**: Support images, tables, charts
-5. **Fine-tuning**: Custom embeddings for domain
-6. **Query expansion**: Improve recall with synonyms
-
-### Feature Additions
-1. **User authentication**: Multi-tenant support
-2. **Document versioning**: Track changes over time
-3. **Analytics dashboard**: Usage patterns, popular queries
-4. **Feedback loop**: User ratings to improve results
-5. **Export functionality**: Download conversations
-6. **API endpoints**: REST API for integration
+1. **Hybrid search**: Combine vector search with BM25 keyword search for better recall
+2. **Streaming responses**: Stream LLM tokens to the UI instead of waiting for full response
+3. **Reranking**: Add a cross-encoder reranker after retrieval for better precision
+4. **Conversation memory**: Pass last N exchanges to the LLM for follow-up questions
+5. **Multi-modal**: Support images and tables extracted from PDFs
+6. **Export**: Allow downloading conversation history as PDF or text
 
 ---
 
 ## Conclusion
 
-This RAG chatbot architecture provides a robust, scalable foundation for knowledge base applications. The modular design enables easy extension and customization while maintaining production-grade reliability and performance.
+This RAG chatbot is built entirely on free, open tools:
+- **Local embeddings** via Sentence Transformers (no API cost)
+- **Free LLM APIs** via Google Gemini and Groq
+- **Embedded vector database** via ChromaDB (no external server)
 
-Key strengths:
-- Dual embedding strategy for versatile search
-- Multi-provider LLM support for flexibility
-- Intelligent chunking preserves context
-- Vector search with pgvector for speed
-- Three response modes for different use cases
-- Comprehensive error handling and retry logic
-
-The system is production-ready with proper security, monitoring, and deployment automation.
+The modular design (`document_utils`, `embeddings_utils`, `response_generation`, `rag_pipeline`) makes each component independently testable and replaceable — for example, swapping ChromaDB for FAISS or adding a new LLM provider requires changes to only one module.

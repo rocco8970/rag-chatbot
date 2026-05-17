@@ -179,6 +179,8 @@ def init_session_state():
             st.session_state.embeddings_manager = EmbeddingsManager()
     if "total_queries" not in st.session_state:
         st.session_state.total_queries = 0
+    if "response_generators" not in st.session_state:
+        st.session_state.response_generators = {}
 
 
 init_session_state()
@@ -199,7 +201,7 @@ with st.sidebar:
         "🧠 Select AI Model",
         ["gemini", "groq"],
         format_func=lambda x: {
-            "gemini": "⚡ Google Gemini 2.0 Flash",
+            "gemini": "⚡ Google Gemini 2.5 Flash",
             "groq": "🚀 Groq Llama 3.1 (Super Fast)"
         }[x]
     )
@@ -460,7 +462,9 @@ if st.session_state.documents:
                 context = "\n\n".join(results["documents"][0])
                 sources = results["metadatas"][0]
                 
-                generator = ResponseGenerator(provider=provider)
+                if provider not in st.session_state.response_generators:
+                    st.session_state.response_generators[provider] = ResponseGenerator(provider=provider)
+                generator = st.session_state.response_generators[provider]
                 answer = generator.generate_response(user_input, context)
                 
                 st.session_state.messages.append({

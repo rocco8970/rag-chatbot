@@ -128,6 +128,60 @@ class ResponseGenerator:
         )
         return completion.choices[0].message.content
     
+    def stream_response(self, question: str, context: str):
+        """Stream response tokens as a generator — used by FastAPI WebSocket."""
+        prompt = self._build_prompt(question, context)
+        if self.provider == "gemini":
+            yield from self._stream_gemini(prompt)
+        elif self.provider == "groq":
+            yield from self._stream_groq(prompt)
+
+    def _stream_gemini(self, prompt: str):
+        """Yield text chunks from Gemini streaming API."""
+        candidates = [
+            self.model_name,
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-001",
+            "gemini-2.0-flash-lite",
+        ]
+        tried = []
+        for model in candidates:
+            if model in tried:
+                continue
+            tried.append(model)
+            try:
+                for chunk in self.client.models.generate_content_stream(
+                    model=model, contents=prompt
+                ):
+                    if chunk.text:
+                        yield chunk.text
+                self.model_name = model
+                return
+            except Exception:
+                continue
+        yield "❌ All Gemini models failed during streaming."
+
+    def _stream_groq(self, prompt: str):
+        """Yield text chunks from Groq streaming API."""
+        stream = self.client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful AI assistant that answers questions based on provided context.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            model=self.model_name,
+            temperature=0.7,
+            max_tokens=1024,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
     def _build_prompt(self, question: str, context: str) -> str:
         """Build the prompt for the LLM"""
         return f"""You are a helpful AI assistant. Answer the question based ONLY on the context provided below.

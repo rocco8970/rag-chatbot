@@ -3,6 +3,7 @@ RAG System Evaluation
 Important for showing academic rigor in your project!
 """
 
+import os
 import json
 from datetime import datetime
 from typing import List, Dict
