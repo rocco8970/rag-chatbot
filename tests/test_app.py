@@ -67,7 +67,7 @@ def test_document_processing_functions():
     These tests do not require real files; they check that functions exist
     and basic chunking behaves as expected.
     """
-    from document_utils import clean_extracted_text, chunk_text
+    from src.document_utils import clean_extracted_text, chunk_text
 
     sample = "This is a simple test. " * 200
     cleaned = clean_extracted_text(sample)
@@ -82,7 +82,7 @@ def test_document_processing_functions():
 @REQUIRES_OPENAI
 def test_embeddings_generation():
     """TEST 3: Embeddings - dimension and batch generation"""
-    from embeddings_utils import create_embedding, create_embeddings_batch
+    from src.embeddings_utils import create_embedding, create_embeddings_batch
     from openai import OpenAI
 
     client = OpenAI()
@@ -129,7 +129,7 @@ def test_response_generation_smoke():
 
     - Verify functions accept arguments and return tuple-like results
     """
-    from response_generation import generate_response_without_context
+    from src.response_generation import generate_response_without_context
 
     # We will mock the OpenAI client call to avoid network
     class DummyClient:
@@ -148,7 +148,7 @@ def test_enhanced_embeddings_flow(monkeypatch):
     - Mock generate_enhanced_json to return a predictable JSON
     - Run generate_enhanced_embeddings_for_all against a test DB (if enabled)
     """
-    from embeddings_utils import generate_enhanced_embeddings_for_all
+    from src.embeddings_utils import generate_enhanced_embeddings_for_all
     from openai import OpenAI
 
     client = OpenAI()
